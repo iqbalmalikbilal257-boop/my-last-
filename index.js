@@ -5,6 +5,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import session from 'express-session';
 import bookRoutes from './routes/book.js';
+import { upload } from './upload-config.js';
 import {
   initDatabase,
   createUser,
@@ -17,11 +18,14 @@ import {
   getReferral,
   updateReferral,
   getDemoUsage,
-  incrementDemoUsage
+  incrementDemoUsage,
+  getPaymentLink,
+  getAllPendingPayments
 } from './database.js';
 import {
   createPaymentLink,
   verifyPaymentLink,
+  submitPaymentProof,
   markPaymentComplete,
   activateSubscription
 } from './secure-payment.js';
@@ -57,6 +61,7 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/data/uploads', express.static(path.join(__dirname, 'data', 'uploads')));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -299,35 +304,94 @@ app.post('/api/payment/create-link', async (req, res) => {
   }
 });
 
-app.post('/api/payment/confirm/:linkId', async (req, res) => {
+app.post('/api/payment/submit/:linkId', upload.single('screenshot'), async (req, res) => {
   try {
     const { linkId } = req.params;
-    const { confirmCode } = req.body;
+    const { transactionId } = req.body;
+    const screenshot = req.file;
+
+    if (!transactionId || transactionId.length < 6) {
+      return res.status(400).json({ success: false, error: 'Valid transaction ID required' });
+    }
+
+    if (!screenshot) {
+      return res.status(400).json({ success: false, error: 'Payment screenshot required' });
+    }
+
+    // 1️⃣ Check transaction ID uniqueness (prevent receipt reuse)
+    const existing = await findPaymentByTransactionId(transactionId);
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Transaction ID already used. Each payment must be unique.' });
+    }
+
     const verification = await verifyPaymentLink(linkId);
-    if (!verification.valid) return res.status(400).json({ success: false, error: verification.error });
-    if (!confirmCode || confirmCode.length < 6) {
-      return res.status(400).json({ success: false, error: 'Valid confirmation code required' });
+    if (!verification.valid) {
+      return res.status(400).json({ success: false, error: verification.error });
     }
-    await markPaymentComplete(linkId);
-    const subscription = await activateSubscription(linkId);
-    if (!subscription) return res.status(500).json({ success: false, error: 'Failed to activate' });
-    const user = await findUserByEmail(subscription.userEmail);
-    if (user) {
-      const durationDays = subscription.plan === 'weekly_unlimited' ? 14 : 30;
-      await createOrUpdateSubscription(user.id, user.email, subscription.plan, subscription.books, durationDays);
-    }
-    await creditReferrerForPaidUser(subscription.userEmail);
-    res.json({ success: true, message: 'Payment confirmed! Subscription activated.', expiresAt: subscription.expiresAt });
+
+    await submitPaymentProof(linkId, transactionId, screenshot.filename);
+    res.json({ success: true, message: 'Payment submitted for verification' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
+app.post('/api/payment/confirm/:linkId', async (req, res) => {
+  try {
+    const superEmail = (process.env.SUPERUSER_EMAIL || 'bilal@paperify.com').toLowerCase();
+    const currentEmail = String(req.session?.userEmail || '').toLowerCase();
+    
+    if (!currentEmail || currentEmail !== superEmail) {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
+
+    const { linkId } = req.params;
+    const verification = await verifyPaymentLink(linkId);
+    if (!verification.valid) return res.status(400).json({ success: false, error: verification.error });
+    
+    if (verification.link.status !== 'pending_verification') {
+      return res.status(400).json({ success: false, error: 'Payment not ready for verification' });
+    }
+
+    await markPaymentComplete(linkId);
+    const subscription = await activateSubscription(linkId);
+    if (!subscription) return res.status(500).json({ success: false, error: 'Failed to activate' });
+    
+    const user = await findUserByEmail(subscription.userEmail);
+    if (user) {
+      const durationDays = subscription.plan === 'weekly_unlimited' ? 14 : 30;
+      await createOrUpdateSubscription(user.id, user.email, subscription.plan, subscription.books, durationDays);
+    }
+    
+    await creditReferrerForPaidUser(subscription.userEmail);
+    res.json({ success: true, message: 'Payment verified and subscription activated', expiresAt: subscription.expiresAt });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Payment link verification endpoint - returns link ID for security tracking
 app.get('/payment/:linkId', async (req, res) => {
   const { linkId } = req.params;
   const verification = await verifyPaymentLink(linkId);
-  if (!verification.valid) return res.render('payment-error', { error: verification.error });
-  res.render('payment-page', { link: verification.link });
+  if (!verification.valid) {
+    return res.status(400).json({ 
+      success: false, 
+      error: verification.error,
+      linkId: linkId 
+    });
+  }
+  // Return link details as JSON for security tracking
+  res.json({ 
+    success: true,
+    linkId: verification.link.linkId,
+    userEmail: verification.link.userEmail,
+    plan: verification.link.plan,
+    amount: verification.link.amount,
+    status: verification.link.status,
+    expiresAt: verification.link.expiresAt,
+    message: 'Payment link verified. Submit proof via popup modal.'
+  });
 });
 
 app.post('/api/admin/temp-unlimited', (req, res) => {
@@ -558,14 +622,14 @@ app.post('/api/user/subscription/lock-book', async (req, res) => {
   }
 });
 
-app.get('/api/admin/payments', (req, res) => {
+app.get('/api/admin/payments', async (req, res) => {
   const superEmail = (process.env.SUPERUSER_EMAIL || 'bilal@paperify.com').toLowerCase();
   const currentEmail = String(req.session?.userEmail || '').toLowerCase();
   if (!currentEmail || currentEmail !== superEmail) {
     return res.status(403).json({ success: false, error: 'Forbidden', payments: [] });
   }
-  // Legacy compatibility endpoint for existing admin UI.
-  return res.json({ success: true, payments: [] });
+  const payments = await getAllPendingPayments();
+  return res.json({ success: true, payments });
 });
 
 // Task Review API with AI feedback
@@ -898,11 +962,13 @@ app.get('/api/analytics/weak-areas', (req, res) => {
 app.use('/book', bookRoutes);
 app.get('/', (req, res) => {
   const superEmail = process.env.SUPERUSER_EMAIL || 'bilal@paperify.com';
+  const paymentNumber = process.env.PAYMENT_NUMBER || '03XXXXXXXXX';
   res.render('Welcomepage', {
     userEmail: req.session?.userEmail || null,
     isSuperUser: req.session?.userEmail === superEmail,
     tempUnlimitedUntil: req.session?.tempUnlimitedUntil || null,
-    superEmail
+    superEmail,
+    paymentNumber
   });
 });
 app.get('/board', (req, res) => res.render('board'));
@@ -926,4 +992,14 @@ app.listen(PORT, async () => {
   } catch (err) {
     console.error('Database failed:', err);
   }
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use!`);
+    console.log(`\n🔧 Solutions:`);
+    console.log(`1. Stop the other server running on port ${PORT}`);
+    console.log(`2. Or set a different port: PORT=3001 node index.js`);
+    console.log(`3. Or kill the process: npx kill-port ${PORT}\n`);
+    process.exit(1);
+  }
+  throw err;
 });
