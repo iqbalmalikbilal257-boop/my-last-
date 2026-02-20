@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -105,8 +105,8 @@
         .modal-content {
             transform: scale(0.9);
             transition: transform 0.3s ease;
-            max-width: 500px;
-            max-height: 70vh;
+            max-width: 600px;
+            max-height: 85vh;
             overflow-y: auto;
         }
 
@@ -223,7 +223,7 @@
                 // For now, show discount badge
                 const discountBadge = document.createElement('div');
                 discountBadge.className = 'fixed top-20 right-4 bg-green-500 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg z-40 animate-bounce';
-                discountBadge.innerHTML = 'ðŸŽ‰ First Visit: Get 10% OFF!';
+                discountBadge.innerHTML = '🎉 First Visit: Get 10% OFF!';
                 document.body.appendChild(discountBadge);
                 setTimeout(() => discountBadge.remove(), 5000);
             }
@@ -670,7 +670,7 @@
     <div id="paymentModal"
         class="modal-overlay fixed inset-0 z-[120] flex items-center justify-center invisible opacity-0 p-4">
         <div class="absolute inset-0 bg-[#3f3a64]/60 backdrop-blur-sm" onclick="closePaymentModal()"></div>
-        <div class="modal-content relative bg-white w-full max-w-md p-8 rounded-[40px] shadow-2xl">
+        <div class="modal-content relative bg-white w-full max-w-2xl p-8 rounded-[40px] shadow-2xl">
             <button onclick="closePaymentModal()"
                 class="absolute top-6 right-8 text-gray-400 hover:text-red-500 transition"><i
                     class="fa-solid fa-xmark text-xl"></i></button>
@@ -683,6 +683,7 @@
         let currentAmount = 0;
         let selectedBooks = [];
         let isLoggedIn = false;
+        window.PAYMENT_NUMBER = '<%= typeof paymentNumber !== "undefined" ? paymentNumber : "03XXXXXXXXX" %>';
 
         // Toggle Nav and Modal Logic
         function toggleModal(modalId) {
@@ -971,7 +972,7 @@
                 document.getElementById('orderIdText').innerText = data.linkId;
                 document.getElementById('orderExpiryText').innerText = '30 minutes';
                 if (data.paymentUrl) {
-                    setTimeout(() => window.open(data.paymentUrl, '_blank'), 600);
+                    // Payment stays in modal
                 }
             } catch (error) {
                 showNotification('Payment link error: ' + error.message, 'error');
@@ -1079,5 +1080,9 @@
 </body>
 
 </html>
+
+
+
+
 
 
