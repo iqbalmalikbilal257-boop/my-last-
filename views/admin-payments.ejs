@@ -115,45 +115,34 @@
                 container.innerHTML = `
                     <div class="text-center py-12 text-gray-400">
                         <i class="fas fa-inbox text-4xl mb-4"></i>
-                        <p>No payments yet</p>
+                        <p>No pending payments</p>
                     </div>
                 `;
                 return;
             }
 
-            const sortedPayments = [...payments].sort((a, b) => 
-                new Date(b.timestamp) - new Date(a.timestamp)
-            );
-
-            container.innerHTML = sortedPayments.map(payment => {
-                const isPending = payment.status === 'pending';
-                const isExpired = new Date(payment.expirationDate) < new Date();
-                const daysLeft = Math.ceil((new Date(payment.expirationDate) - new Date()) / (1000 * 60 * 60 * 24));
-
+            container.innerHTML = payments.map(payment => {
+                const books = JSON.parse(payment.books || '[]');
                 return `
-                    <div class="border rounded-lg p-4 ${isPending ? 'bg-yellow-50 border-yellow-200' : 'bg-white'}">
+                    <div class="border rounded-lg p-4 bg-yellow-50 border-yellow-200">
                         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                             <div class="flex-1">
                                 <div class="flex items-center gap-3 mb-2">
-                                    <span class="px-3 py-1 rounded-full text-xs font-bold ${
-                                        isPending ? 'bg-yellow-200 text-yellow-800' : 
-                                        isExpired ? 'bg-red-200 text-red-800' : 
-                                        'bg-green-200 text-green-800'
-                                    }">
-                                        ${isPending ? '⏳ PENDING' : isExpired ? '❌ EXPIRED' : '✅ ACTIVE'}
+                                    <span class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-200 text-yellow-800">
+                                        ⏳ PENDING VERIFICATION
                                     </span>
                                     <span class="text-sm text-gray-500">
-                                        ${new Date(payment.timestamp).toLocaleString()}
+                                        ${new Date(payment.created_at).toLocaleString()}
                                     </span>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2 text-sm">
                                     <div>
                                         <span class="text-gray-500">Email:</span>
-                                        <span class="font-semibold ml-2">${payment.userEmail}</span>
+                                        <span class="font-semibold ml-2">${payment.user_email}</span>
                                     </div>
                                     <div>
                                         <span class="text-gray-500">Plan:</span>
-                                        <span class="font-semibold ml-2">${getPlanName(payment.plan)}</span>
+                                        <span class="font-semibold ml-2">${payment.plan}</span>
                                     </div>
                                     <div>
                                         <span class="text-gray-500">Amount:</span>
@@ -161,19 +150,14 @@
                                     </div>
                                     <div>
                                         <span class="text-gray-500">Transaction ID:</span>
-                                        <span class="font-mono font-semibold ml-2">${payment.transactionId}</span>
+                                        <span class="font-mono font-semibold ml-2">${payment.transaction_id || 'N/A'}</span>
                                     </div>
-                                    ${payment.books && payment.books.length > 0 ? `
+                                    ${books.length > 0 ? `
                                     <div class="col-span-2">
                                         <span class="text-gray-500">Books:</span>
-                                        <span class="font-semibold ml-2">${payment.books.join(', ')}</span>
+                                        <span class="font-semibold ml-2">${books.join(', ')}</span>
                                     </div>
                                     ` : ''}
-                                    <div class="col-span-2">
-                                        <span class="text-gray-500">Expires:</span>
-                                        <span class="font-semibold ml-2">${new Date(payment.expirationDate).toLocaleDateString()} 
-                                        ${!isExpired ? `(${daysLeft} days left)` : '(Expired)'}</span>
-                                    </div>
                                 </div>
                             </div>
                             <div class="flex flex-col gap-2">
@@ -183,16 +167,10 @@
                                     <i class="fas fa-image"></i> View Screenshot
                                 </a>
                                 ` : ''}
-                                ${isPending ? `
-                                <button onclick="approvePayment('${payment.transactionId}')" 
+                                <button onclick="approvePayment('${payment.link_id}')" 
                                         class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm">
-                                    <i class="fas fa-check"></i> Approve
+                                    <i class="fas fa-check"></i> Approve & Activate
                                 </button>
-                                <button onclick="rejectPayment('${payment.transactionId}')" 
-                                        class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm">
-                                    <i class="fas fa-times"></i> Reject
-                                </button>
-                                ` : ''}
                             </div>
                         </div>
                     </div>
@@ -212,49 +190,25 @@
             return names[plan] || plan;
         }
 
-        async function approvePayment(transactionId) {
-            if (!confirm('Approve this payment?')) return;
+        async function approvePayment(linkId) {
+            if (!confirm('Verify and approve this payment? This will activate the subscription.')) return;
 
             try {
-                const response = await fetch('/api/admin/approve-payment', {
+                const response = await fetch(`/api/payment/confirm/${linkId}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ transactionId })
+                    headers: { 'Content-Type': 'application/json' }
                 });
 
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('✅ Payment approved successfully!');
+                    alert('✅ Payment verified and subscription activated!');
                     loadPayments();
                 } else {
                     alert('❌ Error: ' + data.error);
                 }
             } catch (error) {
                 alert('❌ Error approving payment');
-            }
-        }
-
-        async function rejectPayment(transactionId) {
-            if (!confirm('Reject this payment? This cannot be undone.')) return;
-
-            try {
-                const response = await fetch('/api/admin/reject-payment', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ transactionId })
-                });
-
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert('✅ Payment rejected');
-                    loadPayments();
-                } else {
-                    alert('❌ Error: ' + data.error);
-                }
-            } catch (error) {
-                alert('❌ Error rejecting payment');
             }
         }
 
@@ -271,3 +225,4 @@
     </script>
 </body>
 </html>
+
