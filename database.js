@@ -85,7 +85,9 @@ export async function initDatabase() {
       amount INTEGER NOT NULL,
       books TEXT DEFAULT '[]',
       signature TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
+      status TEXT DEFAULT 'pending_payment',
+      transaction_id TEXT,
+      screenshot TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       expires_at DATETIME NOT NULL,
       paid_at DATETIME
@@ -141,6 +143,8 @@ export async function savePayment(paymentData) {
 
 export async function findPaymentByTransactionId(transactionId) {
   const database = await initDatabase();
+  const paymentLink = await database.get('SELECT * FROM payment_links WHERE transaction_id = ?', [transactionId]);
+  if (paymentLink) return paymentLink;
   return await database.get('SELECT * FROM payments WHERE transaction_id = ?', [transactionId]);
 }
 
@@ -233,9 +237,23 @@ export async function getPaymentLink(linkId) {
   return await database.get('SELECT * FROM payment_links WHERE link_id = ?', [linkId]);
 }
 
-export async function updatePaymentLink(linkId, status, paidAt = null) {
+export async function updatePaymentLink(linkId, status, paidAt = null, transactionId = null, screenshot = null) {
   const database = await initDatabase();
-  await database.run('UPDATE payment_links SET status = ?, paid_at = ? WHERE link_id = ?', [status, paidAt, linkId]);
+  if (transactionId || screenshot) {
+    await database.run(
+      'UPDATE payment_links SET status = ?, paid_at = ?, transaction_id = ?, screenshot = ? WHERE link_id = ?',
+      [status, paidAt, transactionId, screenshot, linkId]
+    );
+  } else {
+    await database.run('UPDATE payment_links SET status = ?, paid_at = ? WHERE link_id = ?', [status, paidAt, linkId]);
+  }
+}
+
+export async function getAllPendingPayments() {
+  const database = await initDatabase();
+  return await database.all(
+    "SELECT * FROM payment_links WHERE status = 'pending_verification' ORDER BY created_at DESC"
+  );
 }
 
 export async function getDemoUsage(userId) {
